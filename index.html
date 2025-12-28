@@ -1,1 +1,435 @@
-hate cmari 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spatial X-Ray & Green Liquid Engine</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            color: #00ff41;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            touch-action: none;
+        }
+        canvas { display: block; }
+        .glitch-text {
+            text-shadow: 0 0 8px #00ff41;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .panel-glass {
+            background: rgba(0, 20, 0, 0.9);
+            border: 1px solid #00ff41;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+            backdrop-filter: blur(8px);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .mini-window {
+            width: 220px;
+            height: 220px;
+            background: rgba(0, 5, 0, 0.95);
+            border: 2px solid #00ff41;
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            overflow: hidden;
+            z-index: 50;
+            box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.3);
+        }
+        .mini-label {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            font-size: 9px;
+            color: #00ff41;
+            background: rgba(0, 40, 0, 0.9);
+            padding: 2px 6px;
+            z-index: 60;
+            border-bottom: 1px solid #00ff41;
+            display: flex;
+            justify-content: space-between;
+        }
+        .velocity-scan {
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: rgba(0, 255, 65, 0.5);
+            box-shadow: 0 0 10px #00ff41;
+            z-index: 55;
+            pointer-events: none;
+            animation: scan 3s linear infinite;
+        }
+        @keyframes scan {
+            from { top: 0%; }
+            to { top: 100%; }
+        }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #00ff41; }
+        input[type=range] { accent-color: #00ff41; }
+        select { background: #000; color: #00ff41; border: 1px solid #00ff41; font-size: 10px; }
+    </style>
+</head>
+<body>
+
+    <!-- HUD Overlay -->
+    <div class="absolute top-0 left-0 w-full p-4 pointer-events-none flex justify-between items-start z-10">
+        <div class="panel-glass p-4 pointer-events-auto rounded-lg w-72">
+            <h2 class="text-xl font-bold glitch-text mb-1">COMPILER_CORE v6.0</h2>
+            <p class="text-[10px] mb-4 opacity-70 uppercase tracking-tighter">Digital Transition Batching Active</p>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="text-[10px] block mb-1">COMPILER BUFFER MODEL (1-40)</label>
+                    <select id="modelSelector" class="w-full p-1">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="text-[10px] block mb-1">X-VELOCITY SCALE</label>
+                        <input type="range" id="xScale" class="w-full" min="0.1" max="3.0" step="0.01" value="1.0">
+                    </div>
+                    <div>
+                        <label class="text-[10px] block mb-1">Y-VELOCITY SCALE</label>
+                        <input type="range" id="yScale" class="w-full" min="0.1" max="3.0" step="0.01" value="1.0">
+                    </div>
+                </div>
+
+                <hr class="border-green-900">
+
+                <div>
+                    <label class="text-[10px] block mb-1">X-RAY TRANSMISSION</label>
+                    <input type="range" id="xrayDepth" class="w-full" min="0.1" max="3.0" step="0.1" value="1.5">
+                </div>
+                <div>
+                    <label class="text-[10px] block mb-1">BATCH FLOW RATE</label>
+                    <input type="range" id="viscosity" class="w-full" min="0" max="10" step="0.1" value="4.0">
+                </div>
+            </div>
+            
+            <button id="recompile" class="mt-6 w-full border border-[#00ff41] py-2 text-xs hover:bg-[#00ff41] hover:text-black transition-all font-bold">
+                SYNC COMPILER BATCH
+            </button>
+        </div>
+
+        <div class="panel-glass p-4 text-right pointer-events-none rounded-lg">
+            <div class="text-[10px] uppercase tracking-widest">Compiler Stream</div>
+            <div class="text-lg" id="model-name">TORUS_KNOT</div>
+            <div id="coords-display" class="text-[10px] mt-2 opacity-50 font-mono">FLOW: 1.00 MHz</div>
+            <div class="text-[9px] text-green-500 mt-1">VELOCITY_FIELD: ENABLED</div>
+        </div>
+    </div>
+
+    <!-- Mini Compiler Frame with Velocity Scan -->
+    <div class="mini-window shadow-lg">
+        <div class="mini-label">
+            <span>COMPILER_WIRE_PREVIEW</span>
+            <span id="batch-id">ID: 0x4F2A</span>
+        </div>
+        <div class="velocity-scan"></div>
+        <div id="mini-container" class="w-full h-full"></div>
+    </div>
+
+    <div id="container"></div>
+
+    <script>
+        // --- 40 Math Models Dictionary ---
+        const MATH_MODELS = [
+            { name: "Torus Knot", fn: (u, v) => [Math.cos(u)*(3+Math.cos(v)), Math.sin(u)*(3+Math.cos(v)), Math.sin(v)] },
+            { name: "Mobius Strip", fn: (u, v) => [(1+v/2*Math.cos(u/2))*Math.cos(u), (1+v/2*Math.cos(u/2))*Math.sin(u), v/2*Math.sin(u/2)] },
+            { name: "Klein Bottle", fn: (u, v) => [Math.cos(u)*(Math.cos(u/2)*(Math.sqrt(2)+Math.cos(v))+Math.sin(u/2)*Math.sin(v)*Math.cos(v)), Math.sin(u)*(Math.cos(u/2)*(Math.sqrt(2)+Math.cos(v))+Math.sin(u/2)*Math.sin(v)*Math.cos(v)), -Math.sin(u/2)*(Math.sqrt(2)+Math.cos(v))+Math.cos(u/2)*Math.sin(v)*Math.cos(v)] },
+            { name: "Helix", fn: (u, v) => [Math.cos(u*5), Math.sin(u*5), u*2] },
+            { name: "Sphere", fn: (u, v) => [Math.cos(u)*Math.sin(v), Math.sin(u)*Math.sin(v), Math.cos(v)] },
+            { name: "Hyperbolic Paraboloid", fn: (u, v) => [u, v, (u*u - v*v)/2] },
+            { name: "Catenoid", fn: (u, v) => [Math.cosh(v)*Math.cos(u), Math.cosh(v)*Math.sin(u), v] },
+            { name: "Dini's Surface", fn: (u, v) => [Math.cos(u)*Math.sin(v), Math.sin(u)*Math.sin(v), Math.cos(v)+Math.log(Math.tan(v/2))+0.2*u] },
+            { name: "Enneper Surface", fn: (u, v) => [u-u*u*u/3+u*v*v, v-v*v*v/3+v*u*u, u*u-v*v] },
+            { name: "Spiral Wave", fn: (u, v) => [u*Math.cos(v), u*Math.sin(v), Math.sin(u)] },
+            { name: "Astroidal Ellipsoid", fn: (u, v) => [Math.pow(Math.cos(u)*Math.cos(v), 3), Math.pow(Math.sin(u)*Math.cos(v), 3), Math.pow(Math.sin(v), 3)] },
+            { name: "Bohemian Dome", fn: (u, v) => [0.5*Math.cos(u), 0.5*Math.sin(u)+Math.cos(v), Math.sin(v)] },
+            { name: "Bour Surface", fn: (u, v) => [Math.sqrt(u)*Math.cos(v)-0.5*u*Math.cos(2*v), Math.sqrt(u)*Math.sin(v)-0.5*u*Math.sin(2*v), 4/3*Math.pow(u,1.5)*Math.cos(1.5*v)] },
+            { name: "Butterfly Curve", fn: (u, v) => [Math.sin(u)*(Math.exp(Math.cos(u))-2*Math.cos(4*u)-Math.pow(Math.sin(u/12),5)), Math.cos(u)*(Math.exp(Math.cos(u))-2*Math.cos(4*u)-Math.pow(Math.sin(u/12),5)), v] },
+            { name: "Cross Cap", fn: (u, v) => [Math.cos(u)*Math.sin(2*v)/2, Math.sin(u)*Math.sin(2*v)/2, (Math.cos(v)*Math.cos(v)-Math.cos(u)*Math.cos(u)*Math.sin(v)*Math.sin(v))] },
+            { name: "Eight Surface", fn: (u, v) => [Math.cos(u)*Math.sin(2*v), Math.sin(u)*Math.sin(2*v), Math.sin(v)] },
+            { name: "Figure-8 Immersion", fn: (u, v) => [Math.cos(u)*(Math.sqrt(2)+Math.cos(v))*Math.cos(u/2), Math.sin(u)*(Math.sqrt(2)+Math.cos(v))*Math.cos(u/2), Math.sin(u/2)*(Math.sqrt(2)+Math.cos(v))] },
+            { name: "Gabriel's Horn", fn: (u, v) => [u, (1/u)*Math.cos(v), (1/u)*Math.sin(v)] },
+            { name: "Handkerchief Surface", fn: (u, v) => [u, v, u*u*u/3 + u*v*v + 2*(u*u-v*v)] },
+            { name: "Henneberg Surface", fn: (u, v) => [2*Math.sinh(u)*Math.cos(v)-2/3*Math.sinh(3*u)*Math.cos(3*v), 2*Math.sinh(u)*Math.sin(v)+2/3*Math.sinh(3*u)*Math.sin(3*v), 2*Math.cosh(2*u)*Math.cos(2*v)] },
+            { name: "Hyperbolic Helicolid", fn: (u, v) => [Math.sinh(v)*Math.cos(3*u), Math.sinh(v)*Math.sin(3*u), 3*u] },
+            { name: "Isotropic Surface", fn: (u, v) => [u-u*u*u/3+u*v*v, v-v*v*v/3+v*u*u, u*u-v*v] },
+            { name: "Kuen Surface", fn: (u, v) => [2*(Math.cos(v)+v*Math.sin(v))*Math.sin(u)/(1+v*v*Math.sin(u)*Math.sin(u)), 2*(Math.sin(v)-v*Math.cos(v))*Math.sin(u)/(1+v*v*Math.sin(u)*Math.sin(u)), Math.log(Math.tan(u/2))+2*Math.cos(u)/(1+v*v*Math.sin(u)*Math.sin(u))] },
+            { name: "Lemniscape", fn: (u, v) => [Math.cos(u)/(1+Math.sin(u)*Math.sin(u)), Math.sin(u)*Math.cos(u)/(1+Math.sin(u)*Math.sin(u)), v] },
+            { name: "Monkey Saddle", fn: (u, v) => [u, v, u*u*u - 3*u*v*v] },
+            { name: "Outer Bend", fn: (u, v) => [Math.cos(u)*Math.cos(v), Math.sin(u)*Math.cos(v), Math.sin(v)+u] },
+            { name: "Pillow Shape", fn: (u, v) => [Math.cos(u), Math.sin(v), Math.cos(u)*Math.sin(v)] },
+            { name: "Plucker Conoid", fn: (u, v) => [u*Math.cos(v), u*Math.sin(v), Math.sin(2*v)] },
+            { name: "Richmond Surface", fn: (u, v) => [-0.5*u - 0.5*Math.pow(u,5)*Math.cos(4*v)/5, 0.5*Math.pow(u,5)*Math.sin(4*v)/5, Math.pow(u,3)*Math.cos(2*v)/3] },
+            { name: "Roman Surface", fn: (u, v) => [Math.sin(2*u)*Math.cos(v)*Math.cos(v), Math.sin(u)*Math.sin(2*v)/2, Math.cos(u)*Math.sin(2*v)/2] },
+            { name: "Scherk Surface", fn: (u, v) => [u, v, Math.log(Math.cos(v)/Math.cos(u))] },
+            { name: "Seashell", fn: (u, v) => [2*(1-Math.exp(u/(6*Math.PI)))*Math.cos(u)*Math.cos(v/2)*Math.cos(v/2), 2*(-1+Math.exp(u/(6*Math.PI)))*Math.sin(u)*Math.cos(v/2)*Math.cos(v/2), 1-Math.exp(u/(3*Math.PI))-Math.sin(v)*Math.exp(u/(6*Math.PI))] },
+            { name: "Snail Shell", fn: (u, v) => [u*Math.cos(u)*Math.cos(v), u*Math.sin(u)*Math.cos(v), -u*Math.sin(v)] },
+            { name: "Steiner Surface", fn: (u, v) => [(Math.sqrt(2)*Math.cos(2*u)*Math.cos(v)*Math.cos(v)+Math.cos(u)*Math.sin(2*v))/(2-Math.sqrt(2)*Math.sin(3*u)*Math.sin(2*v)), 0, 0] },
+            { name: "Swallowtail", fn: (u, v) => [u, v, u*v+u*u*u+v*v*v*v] },
+            { name: "Tractroid", fn: (u, v) => [Math.cos(u)*Math.sin(v), Math.sin(u)*Math.sin(v), Math.cos(v)+Math.log(Math.tan(v/2))] },
+            { name: "Trifolium", fn: (u, v) => [(4*Math.cos(u)*Math.pow(Math.sin(u),2)), (4*Math.pow(Math.cos(u),2)*Math.sin(u)), v] },
+            { name: "Twisted Ribbon", fn: (u, v) => [v*Math.cos(u), v*Math.sin(u), u+v] },
+            { name: "Umbilic Toric", fn: (u, v) => [Math.sin(u)*(7+Math.cos(u/3-2*v)+2*Math.cos(u/3+v)), Math.cos(u)*(7+Math.cos(u/3-2*v)+2*Math.cos(u/3+v)), Math.sin(u/3-2*v)+2*Math.sin(u/3+v)] },
+            { name: "Whitney Umbrella", fn: (u, v) => [u*v, u, v*v] }
+        ];
+
+        // --- Shader Source ---
+        const vertexShader = `
+            uniform float uTime;
+            uniform float uViscosity;
+            uniform float uXScale;
+            uniform float uYScale;
+            varying float vDistance;
+
+            void main() {
+                vec3 pos = position;
+                pos.x *= uXScale;
+                pos.y *= uYScale;
+                
+                // Velocity field calculation for background particles
+                float dist = length(pos.xy);
+                float wave = sin(dist * 3.0 + uTime * uViscosity);
+                
+                pos.x += wave * 0.15;
+                pos.y += cos(dist * 3.0 + uTime * uViscosity) * 0.15;
+                pos.z += sin(uTime * 0.8 + dist) * (uViscosity * 0.05);
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                gl_PointSize = (18.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+                vDistance = dist;
+            }
+        `;
+
+        const fragmentShader = `
+            uniform float uTime;
+            uniform float uXrayDepth;
+            varying float vDistance;
+
+            void main() {
+                float strength = distance(gl_PointCoord, vec2(0.5));
+                strength = 1.0 - strength;
+                strength = pow(strength, 3.5);
+                
+                // Pulsing velocity alpha
+                float alphaPulse = 0.8 + 0.2 * sin(uTime * 2.0 + vDistance);
+                float alpha = strength * (uXrayDepth / (vDistance + 0.3)) * alphaPulse;
+                
+                vec3 colorA = vec3(0.0, 1.0, 0.4); 
+                vec3 colorB = vec3(0.0, 0.1, 0.0); 
+                vec3 finalColor = mix(colorB, colorA, sin(vDistance * 2.0 - uTime * 1.5) * 0.5 + 0.5);
+                
+                gl_FragColor = vec4(finalColor, alpha);
+            }
+        `;
+
+        // --- Custom Wireframe Shader for Mini Window ---
+        const wireVertexShader = `
+            uniform float uTime;
+            uniform float uFlow;
+            varying float vY;
+            void main() {
+                vY = position.y;
+                vec3 pos = position;
+                // Add "digital jitter" velocity to wireframe
+                float jitter = sin(uTime * 20.0 + position.z * 10.0) * 0.01;
+                pos.x += jitter;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+        `;
+
+        const wireFragmentShader = `
+            uniform float uTime;
+            varying float vY;
+            void main() {
+                // Batching transition effect: moving horizontal line
+                float scan = mod(vY * 5.0 - uTime * 2.0, 1.0);
+                float line = step(0.9, scan);
+                vec3 color = mix(vec3(0.0, 0.5, 0.1), vec3(0.0, 1.0, 0.3), line);
+                gl_FragColor = vec4(color, 0.6 + line * 0.4);
+            }
+        `;
+
+        // --- Core Variables ---
+        let scene, camera, renderer, points, material;
+        let miniScene, miniCamera, miniRenderer, miniMesh, miniWireMat;
+        let clock = new THREE.Clock();
+        let currentModelIndex = 0;
+
+        function init() {
+            // Main Renderer
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 8;
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Mini Renderer
+            const miniCont = document.getElementById('mini-container');
+            miniScene = new THREE.Scene();
+            miniCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+            miniCamera.position.set(5, 5, 5);
+            miniCamera.lookAt(0, 0, 0);
+            miniRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            miniRenderer.setSize(220, 220);
+            miniCont.appendChild(miniRenderer.domElement);
+
+            // Populate Selector
+            const selector = document.getElementById('modelSelector');
+            MATH_MODELS.forEach((m, i) => {
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.innerText = `${i+1}. ${m.name.toUpperCase()}`;
+                selector.appendChild(opt);
+            });
+
+            createModel();
+
+            // Events
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('mousemove', onMouseMove);
+            document.getElementById('recompile').addEventListener('click', () => {
+                document.getElementById('batch-id').innerText = 'ID: 0x' + Math.floor(Math.random()*65535).toString(16).toUpperCase();
+                createModel();
+            });
+            selector.addEventListener('change', (e) => {
+                currentModelIndex = parseInt(e.target.value);
+                document.getElementById('model-name').innerText = MATH_MODELS[currentModelIndex].name.toUpperCase();
+                createModel();
+            });
+
+            animate();
+        }
+
+        function createModel() {
+            if (points) scene.remove(points);
+            if (miniMesh) miniScene.remove(miniMesh);
+
+            const count = 25000;
+            const positions = new Float32Array(count * 3);
+            const modelFn = MATH_MODELS[currentModelIndex].fn;
+
+            // Main Data
+            const geometry = new THREE.BufferGeometry();
+            for (let i = 0; i < count; i++) {
+                const i3 = i * 3;
+                const u = Math.random() * Math.PI * 2;
+                const v = Math.random() * Math.PI * 2;
+                const res = modelFn(u, v);
+                positions[i3 + 0] = res[0] || 0;
+                positions[i3 + 1] = res[1] || 0;
+                positions[i3 + 2] = res[2] || 0;
+            }
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+            material = new THREE.ShaderMaterial({
+                vertexShader,
+                fragmentShader,
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+                uniforms: {
+                    uTime: { value: 0 },
+                    uXrayDepth: { value: 1.5 },
+                    uViscosity: { value: 2.0 },
+                    uXScale: { value: 1.0 },
+                    uYScale: { value: 1.0 }
+                }
+            });
+
+            points = new THREE.Points(geometry, material);
+            scene.add(points);
+
+            // Mini Wireframe with Batch Transitions
+            const segments = 32;
+            const wireGeo = new THREE.PlaneGeometry(2, 2, segments, segments);
+            const wirePos = wireGeo.attributes.position;
+            
+            for(let i=0; i<wirePos.count; i++){
+                const u = (wirePos.getX(i) + 1) * Math.PI;
+                const v = (wirePos.getY(i) + 1) * Math.PI;
+                const res = modelFn(u, v);
+                wirePos.setXYZ(i, res[0], res[1], res[2]);
+            }
+            wireGeo.computeVertexNormals();
+            
+            miniWireMat = new THREE.ShaderMaterial({
+                vertexShader: wireVertexShader,
+                fragmentShader: wireFragmentShader,
+                wireframe: true,
+                transparent: true,
+                uniforms: {
+                    uTime: { value: 0 }
+                }
+            });
+
+            miniMesh = new THREE.Mesh(wireGeo, miniWireMat);
+            miniScene.add(miniMesh);
+        }
+
+        function onMouseMove(e) {
+            const x = (e.clientX / window.innerWidth - 0.5) * 2;
+            const y = -(e.clientY / window.innerHeight - 0.5) * 2;
+            points.rotation.y = x * 0.8;
+            points.rotation.x = y * 0.8;
+            
+            const xs = document.getElementById('xScale').value;
+            const ys = document.getElementById('yScale').value;
+            document.getElementById('coords-display').innerText = `FLOW: ${(1.0 + Math.abs(x)).toFixed(2)} MHz`;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getElapsedTime();
+
+            // Sync Main Uniforms
+            material.uniforms.uTime.value = delta;
+            material.uniforms.uXrayDepth.value = parseFloat(document.getElementById('xrayDepth').value);
+            material.uniforms.uViscosity.value = parseFloat(document.getElementById('viscosity').value);
+            const xs = parseFloat(document.getElementById('xScale').value);
+            const ys = parseFloat(document.getElementById('yScale').value);
+            material.uniforms.uXScale.value = xs;
+            material.uniforms.uYScale.value = ys;
+
+            points.rotation.z += 0.001;
+
+            // Sync Mini Mesh Velocity
+            if (miniMesh && miniWireMat) {
+                miniWireMat.uniforms.uTime.value = delta;
+                miniMesh.scale.set(xs, ys, 1.0);
+                miniMesh.rotation.y += 0.01;
+                miniMesh.rotation.z += 0.005;
+            }
+
+            renderer.render(scene, camera);
+            miniRenderer.render(miniScene, miniCamera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
+
+
